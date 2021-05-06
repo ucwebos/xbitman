@@ -1,0 +1,9 @@
+.vscode
+.idea
+*torch.svg
+*.out
+*.log
+*.db
+.DS_Store
+/vendor
+/ZDATA
