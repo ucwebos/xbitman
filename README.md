@@ -67,7 +67,7 @@
         }
     }
 
-## Put COUNT [:table/put] 语法:
+## Put [:table/put] 语法:
     {
         "data": 
         [
