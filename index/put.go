@@ -61,6 +61,20 @@ func (idx *Index) BatchAppendWithRemove(aKeys, rKeys map[string][]uint32) (err e
 	})
 }
 
+func (idx *Index) BatchRemove(rKeys map[string][]uint32) (err error) {
+	idx.mux.Lock()
+	defer idx.mux.Unlock()
+	return idx.Store.Update(func(tx *bolt.Tx) error {
+		for rKey, uKeys := range rKeys {
+			err = idx._remove(tx, []byte(rKey), uKeys...)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (idx *Index) Append(key []byte, uKey uint32) (err error) {
 	idx.mux.Lock()
 	defer idx.mux.Unlock()

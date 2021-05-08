@@ -17,6 +17,12 @@ import (
 	bolt "xbitman/libs/bbolt"
 )
 
+const (
+	tagPK     = "_0_PK"
+	tagIdx    = "_1_"
+	tagIdxSub = "_2_"
+)
+
 type Table struct {
 	Mux     sync.Mutex        `json:"-"`
 	Name    string            `json:"name"`
@@ -64,15 +70,22 @@ func (t *Table) Close() (err error) {
 
 func (t *Table) InitIndexes() {
 	// pkMap
-	t.PkMap = NewPkMap(t.Store, t.Name+"_0_PK", t.Scheme.PKey.Type)
+	t.PkMap = NewPkMap(t.Store, t.Name+tagPK, t.Scheme.PKey.Type)
 	// indexes
 	for _, item := range t.Scheme.Indexes {
-		idx := NewIndex(t.Store, t.Name+"_1_"+item.Key, item.Type)
+		if item.Type == conf.TypeMulti {
+			for _, i2 := range item.SubIndexes {
+				iKey := item.Key + "." + i2.Key
+				idx := NewIndex(t.Store, t.Name+tagIdxSub+iKey, i2.Type)
+				t.Indexes[iKey] = idx
+			}
+		}
+		idx := NewIndex(t.Store, t.Name+tagIdx+item.Key, item.Type)
 		t.Indexes[item.Key] = idx
 	}
 }
 
-func (t *Table) Put(data map[string]interface{}) (err error) {
+func (t *Table) Delete(keys []interface{}) (err error) {
 	t.Mux.Lock()
 	defer t.Mux.Unlock()
 	kvReader, err := kvstore.KVReader()
@@ -83,97 +96,39 @@ func (t *Table) Put(data map[string]interface{}) (err error) {
 	if err != nil {
 		return err
 	}
-	var (
-		re    = true
-		uKey  uint32
-		oData = make(map[string]interface{})
-	)
-	// find pk
-	pkv, ok := data[t.Scheme.PKey.Key]
-	if !ok {
-		return errors.New("no pk data")
-	}
-	pkVal := TypeConv(t.Scheme.PKey.Type, pkv)
-	uKeyB := t.PkMap.get(pkVal)
-	if uKeyB == 0 {
-		uKey = t.uKeyAdd()
-		re = false
-		err = t.PkMap.Put(pkVal, []byte(strconv.Itoa(int(uKey))))
-		if err != nil {
-			return err
-		}
-	} else {
-		uKey = uKeyB
-		// find kv
-		raw, err := kvReader.Get(t.kvKey(uKey))
-		if err != nil {
-			return err
-		}
-		err = libs.JSON.Unmarshal(raw, &oData)
-		if err != nil {
-			return err
-		}
-	}
-	// index
-	for _, schemeKey := range t.Scheme.Indexes {
-		iv, ok := data[schemeKey.Key]
-		if !ok {
-			continue
-		}
-		iVal := TypeConv(schemeKey.Type, iv)
-		idx := t.Indexes[schemeKey.Key]
-		if re {
-			if ov, ok := oData[schemeKey.Key]; ok {
-				rVal := TypeConv(schemeKey.Type, ov)
-				idx.AppendWithRemove(iVal, rVal, uKey)
-			}
+	pks := make([]string, len(keys))
 
-			continue
-		}
-		idx.Append(iVal, uKey)
+	for i, k := range keys {
+		pks[i] = string(TypeConv(t.PkMap.IType(), k))
 	}
-	// set kv
-	raw, _ := libs.JSON.Marshal(data)
-	return kvWriter.Set(t.kvKey(uKey), raw)
-}
-
-func (t *Table) Delete(key interface{}) (err error) {
-	t.Mux.Lock()
-	defer t.Mux.Unlock()
-	kvReader, err := kvstore.KVReader()
+	dataMap, err := t.readDataByPKeys(pks, kvReader)
+	idxBatchRmData := make(map[string]map[string][]uint32)
+	for _, it := range dataMap {
+		t.idxBatchWriteData(idxBatchRmData, it.Data, it.UKey)
+	}
+	// del pk
+	err = t.PkMap.DeleteBatch(pks)
 	if err != nil {
 		return err
 	}
-	kvWriter, err := kvstore.KVWriter()
-	if err != nil {
-		return err
-	}
-	var (
-		uKey  uint32
-		oData = make(map[string]interface{})
-	)
-	// find pk
-	pkVal := TypeConv(t.Scheme.PKey.Type, key)
-	uKey = t.PkMap.get(pkVal)
-	// find kv
-	raw, err := kvReader.Get(t.kvKey(uKey))
-	if err != nil {
-		return err
-	}
-	err = libs.JSON.Unmarshal(raw, &oData)
-	if err != nil {
-		return err
-	}
-	// index
-	for _, schemeKey := range t.Scheme.Indexes {
-		idx := t.Indexes[schemeKey.Key]
-		if ov, ok := oData[schemeKey.Key]; ok {
-			rVal := TypeConv(schemeKey.Type, ov)
-			idx.Remove(rVal, uKey)
+	// del idx
+	for key, rData := range idxBatchRmData {
+		idx := t.Indexes[key]
+		err = idx.BatchRemove(rData)
+		if err != nil {
+			return err
 		}
 	}
 	// del kv
-	return kvWriter.Delete(t.kvKey(uKey))
+	wBatch := kvWriter.NewBatch()
+	for _, it := range dataMap {
+		wBatch.Delete(t.kvKey(it.UKey))
+	}
+	err = kvWriter.ExecuteBatch(wBatch)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *Table) DumpIndexes() (err error) {
@@ -314,7 +269,25 @@ func (t *Table) query(whr Op) (bm *roaring.Bitmap, err error) {
 	}
 	idx, ok := t.Indexes[whr.Key]
 	if !ok {
+		// 判断是否是map
 		return nil, errors.New(fmt.Sprintf("not found index[%s]", whr.Key))
+	}
+	switch idx.Type {
+	case conf.TypeSet:
+		if whr.Op != contains {
+			return nil, errors.New(fmt.Sprintf("index[%s] is Set can only have to operator[contains] ", whr.Key))
+		}
+	case conf.TypeMulti:
+		if whr.SubKey == "" {
+			return nil, errors.New(fmt.Sprintf("index[%s] is Multi must have subkey", whr.Key))
+		}
+		iKey := whr.Key + "." + whr.SubKey
+		subIdx, ok := t.Indexes[iKey]
+		if !ok {
+			// 判断是否是map
+			return nil, errors.New(fmt.Sprintf("not found index[%s] subIndex[%s]", whr.Key, whr.SubKey))
+		}
+		return t.exec(subIdx, whr)
 	}
 	return t.exec(idx, whr)
 }
@@ -339,7 +312,6 @@ func (t *Table) exec(q qs, whr Op) (bm *roaring.Bitmap, err error) {
 	case le:
 		return q.findLessOrEq(TypeConv(q.IType(), whr.Val)), nil
 	case gt:
-		fmt.Println(string(TypeConv(q.IType(), whr.Val)))
 		return q.findMoreThan(TypeConv(q.IType(), whr.Val)), nil
 	case ge:
 		return q.findMoreOrEq(TypeConv(q.IType(), whr.Val)), nil
@@ -347,7 +319,7 @@ func (t *Table) exec(q qs, whr Op) (bm *roaring.Bitmap, err error) {
 		return q.findNot(TypeConv(q.IType(), whr.Val)), nil
 	case btw:
 		if reflect.TypeOf(whr.Val).Kind() != reflect.Slice {
-			return nil, errors.New("operator [in] must be use slice")
+			return nil, errors.New("operator [btw] must be use slice")
 		}
 		var list = make([][]byte, 0)
 		s := reflect.ValueOf(whr.Val)
@@ -356,9 +328,14 @@ func (t *Table) exec(q qs, whr Op) (bm *roaring.Bitmap, err error) {
 			list = append(list, TypeConv(q.IType(), ele.Interface()))
 		}
 		if len(list) != 2 {
-			return nil, errors.New("operator [in] must be use slice like [v1,v2]")
+			return nil, errors.New("operator [btw] must be use slice like [v1,v2]")
 		}
 		return q.findBetween(list[0], list[1]), nil
+	case contains:
+		if q.IType() != conf.TypeSet {
+			return nil, errors.New(fmt.Sprintf("the index can't be operator[%s]", whr.Op))
+		}
+		return q.find(TypeConv(conf.TypeString, whr.Val)), nil
 	default:
 		return nil, errors.New(fmt.Sprintf("not found operator[%s]", whr.Op))
 	}
@@ -409,7 +386,7 @@ func TypeConv(iType int, v interface{}) (buf []byte) {
 		i, _ := conv.Float64(v)
 		s := strconv.FormatFloat(i, 'f', -1, 64)
 		return []byte(s)
-	case conf.TypeString:
+	case conf.TypeString, conf.TypeSet:
 		s, _ := conv.String(v)
 		// 字符串前面加0处理空字符串问题
 		return []byte("0" + s)

@@ -3,15 +3,83 @@ package index
 import (
 	"errors"
 	"fmt"
+	"github.com/cstockton/go-conv"
+	"reflect"
+	"xbitman/conf"
 	"xbitman/kvstore"
 	"xbitman/kvstore/kv"
 	"xbitman/libs"
 )
 
-type uKeyItem struct {
-	UKey  uint32
-	New   bool
-	OData map[string]interface{}
+type uItem struct {
+	UKey uint32
+	pk   string
+	Data map[string]interface{}
+}
+
+func (t *Table) idxBatchWriteData(idxBatch map[string]map[string][]uint32, item map[string]interface{}, uKey uint32) {
+	for _, schemeKey := range t.Scheme.Indexes {
+		iv, ok := item[schemeKey.Key]
+		if !ok {
+			continue
+		}
+		var (
+			iKey = schemeKey.Key
+			iVal string
+		)
+		switch schemeKey.Type {
+		case conf.TypeSet:
+			if reflect.TypeOf(iv).Kind() != reflect.Slice {
+				iVal = string(TypeConv(schemeKey.Type, iv))
+				t._idxBatchWriteData(idxBatch, iKey, iVal, uKey)
+				continue
+			}
+			s := reflect.ValueOf(iv)
+			for i := 0; i < s.Len(); i++ {
+				ele := s.Index(i)
+				iVal = string(TypeConv(schemeKey.Type, ele.Interface()))
+				t._idxBatchWriteData(idxBatch, iKey, iVal, uKey)
+			}
+		case conf.TypeMulti:
+			if reflect.TypeOf(iv).Kind() != reflect.Slice {
+				continue
+			}
+			s := reflect.ValueOf(iv)
+			for i := 0; i < s.Len(); i++ {
+				sIt := s.Index(i).Interface()
+				if reflect.TypeOf(sIt).Kind() != reflect.Map {
+					continue
+				}
+				s2 := reflect.ValueOf(sIt)
+				iter := s2.MapRange()
+				for iter.Next() {
+					k := iter.Key()
+					v := iter.Value()
+					kStr, _ := conv.String(k.Interface())
+					for _, scheme2 := range schemeKey.SubIndexes {
+						if scheme2.Key == kStr {
+							i2Key := iKey + "." + kStr
+							iVal = string(TypeConv(scheme2.Type, v.Interface()))
+							t._idxBatchWriteData(idxBatch, i2Key, iVal, uKey)
+						}
+					}
+				}
+			}
+		default:
+			iVal = string(TypeConv(schemeKey.Type, iv))
+			t._idxBatchWriteData(idxBatch, iKey, iVal, uKey)
+		}
+	}
+}
+
+func (t *Table) _idxBatchWriteData(idxBatch map[string]map[string][]uint32, iKey, iVal string, uKey uint32) {
+	if _, ok := idxBatch[iKey]; !ok {
+		idxBatch[iKey] = make(map[string][]uint32)
+	}
+	if _, ok := idxBatch[iKey][iVal]; !ok {
+		idxBatch[iKey][iVal] = make([]uint32, 0)
+	}
+	idxBatch[iKey][iVal] = append(idxBatch[iKey][iVal], uKey)
 }
 
 func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
@@ -25,50 +93,32 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	if err != nil {
 		return err
 	}
-	ukData, newUKeys, err := t.uKeyData(items, kvReader)
+	//newUKeys
+	ukData, err := t.oUKeyData(items, kvReader)
 	if err != nil {
 		return err
 	}
 	var (
 		idxBatchData   = make(map[string]map[string][]uint32)
 		idxBatchRmData = make(map[string]map[string][]uint32)
+		newUKeys       = make(map[string]uint32)
 	)
 	for i, item := range items {
-		uKeyIt := ukData[i]
-		for _, schemeKey := range t.Scheme.Indexes {
-			iv, ok := item[schemeKey.Key]
-			if !ok {
-				continue
-			}
-			iVal := string(TypeConv(schemeKey.Type, iv))
-			if _, ok := idxBatchData[schemeKey.Key]; !ok {
-				idxBatchData[schemeKey.Key] = make(map[string][]uint32)
-			}
-			if _, ok := idxBatchData[schemeKey.Key][iVal]; !ok {
-				idxBatchData[schemeKey.Key][iVal] = make([]uint32, 0)
-			}
-			idxBatchData[schemeKey.Key][iVal] = append(idxBatchData[schemeKey.Key][iVal], uKeyIt.UKey)
-			if !uKeyIt.New {
-				if ov, ok := uKeyIt.OData[schemeKey.Key]; ok {
-					rVal := string(TypeConv(schemeKey.Type, ov))
-					if _, ok := idxBatchRmData[schemeKey.Key]; !ok {
-						idxBatchRmData[schemeKey.Key] = make(map[string][]uint32)
-					}
-					if _, ok := idxBatchRmData[schemeKey.Key][rVal]; !ok {
-						idxBatchRmData[schemeKey.Key][rVal] = make([]uint32, 0)
-					}
-					idxBatchRmData[schemeKey.Key][rVal] = append(idxBatchRmData[schemeKey.Key][rVal], uKeyIt.UKey)
-				}
-			}
+		it := ukData[i]
+		if it.UKey == 0 {
+			it.UKey = t.uKeyAdd()
+			newUKeys[it.pk] = it.UKey
+		} else {
+			// item 对比 it.Data ?
+			t.idxBatchWriteData(idxBatchRmData, it.Data, it.UKey)
 		}
+		t.idxBatchWriteData(idxBatchData, item, it.UKey)
 	}
-
 	// 写 pk
 	err = t.PkMap.PutBatch(newUKeys)
 	if err != nil {
 		return err
 	}
-
 	// 写 idx
 	for key, aData := range idxBatchData {
 		fmt.Println(key)
@@ -95,43 +145,69 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	return err
 }
 
-func (t *Table) uKeyData(items []map[string]interface{}, kvReader kv.Reader) (ukData []uKeyItem, newUKeys map[string]uint32, err error) {
-	ukData = make([]uKeyItem, len(items))
-	newUKeys = make(map[string]uint32, 0)
+func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (ukData map[int]uItem, err error) {
+	ukData = make(map[int]uItem, 0)
 	pks := make([]string, len(items))
 	for i, item := range items {
 		pkv, ok := item[t.Scheme.PKey.Key]
 		if !ok {
-			return nil, nil, errors.New(fmt.Sprintf("no found pkey from data[%v]", item))
+			return nil, errors.New(fmt.Sprintf("no found pkey from data[%v]", item))
 		}
 		pks[i] = string(TypeConv(t.Scheme.PKey.Type, pkv))
-		ukData[i] = uKeyItem{
-			UKey:  0,
-			New:   true,
-			OData: make(map[string]interface{}),
-		}
 	}
-	pkUMap, err := kvReader.MultiGetMap(pks)
+	// PK to kv
+	dataMap, err := t.readDataByPKeys(pks, kvReader)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	for i, pk := range pks {
-		uKey := t.PkMap.get([]byte(pk))
-		// todo 判断uKey==0 ？
-		if v, ok := pkUMap[pk]; ok {
-			ukData[i].New = false
-			ukData[i].UKey = uKey
-			oData := make(map[string]interface{})
-			err = libs.JSON.Unmarshal(v, &oData)
-			if err != nil {
-				return nil, nil, err
-			}
-			ukData[i].OData = oData
+		if v, ok := dataMap[pk]; ok {
+			ukData[i] = v
 			continue
 		}
-		uKey = t.uKeyAdd()
-		newUKeys[pk] = uKey
-		ukData[i].UKey = uKey
+		ukData[i] = uItem{
+			pk: pk,
+		}
 	}
-	return ukData, newUKeys, nil
+	return ukData, nil
+}
+
+func (t *Table) readDataByPKeys(pks []string, kvReader kv.Reader) (dataMap map[string]uItem, err error) {
+	dataMap = make(map[string]uItem)
+	var (
+		uKvKeys = make([]string, 0)
+		uKeyMap = t.PkMap.mapGets(pks)
+		pkKvMap = make(map[string]string)
+	)
+	// to kv key
+	for pk, uKey := range uKeyMap {
+		uKvKey := string(t.kvKey(uKey))
+		uKvKeys = append(uKvKeys, uKvKey)
+		pkKvMap[pk] = uKvKey
+	}
+	// kv get
+	uDataMap, err := kvReader.MultiGetMap(uKvKeys)
+	if err != nil {
+		return nil, err
+	}
+	for _, pk := range pks {
+		if uKvKey, ok := pkKvMap[pk]; ok {
+			if v, ok := uDataMap[uKvKey]; ok {
+				var (
+					item = uItem{
+						UKey: uKeyMap[pk],
+						pk:   pk,
+					}
+					data = make(map[string]interface{})
+				)
+				err = libs.JSON.Unmarshal(v, &data)
+				if err != nil {
+					return nil, err
+				}
+				item.Data = data
+				dataMap[pk] = item
+			}
+		}
+	}
+	return dataMap, nil
 }

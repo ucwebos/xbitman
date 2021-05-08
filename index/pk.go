@@ -77,6 +77,25 @@ func (p *PkMap) PutBatch(items map[string]uint32) (err error) {
 	return nil
 }
 
+func (p *PkMap) DeleteBatch(keys []string) (err error) {
+	p.mux.Lock()
+	defer p.mux.Unlock()
+	tx, err := p.Store.Begin(true)
+	if err != nil {
+		return err
+	}
+	bkt := tx.Bucket([]byte(p.Name), p.Number())
+	for _, key := range keys {
+		if err = bkt.Delete([]byte(key)); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (p *PkMap) get(key []byte) (uKey uint32) {
 	p.Store.View(func(tx *bolt.Tx) error {
 		v := tx.Bucket([]byte(p.Name), p.Number()).Get(key)
@@ -85,6 +104,23 @@ func (p *PkMap) get(key []byte) (uKey uint32) {
 		return nil
 	})
 	return uKey
+}
+
+func (p *PkMap) mapGets(keys []string) (uKeyMap map[string]uint32) {
+	uKeyMap = make(map[string]uint32, 0)
+	p.Store.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket([]byte(p.Name), p.Number())
+		for _, key := range keys {
+			v := bkt.Get([]byte(key))
+			if len(v) > 0 {
+				uKeyI, _ := strconv.Atoi(string(v))
+				uKey := uint32(uKeyI)
+				uKeyMap[key] = uKey
+			}
+		}
+		return nil
+	})
+	return uKeyMap
 }
 
 func (p *PkMap) find(key []byte) (bm *roaring.Bitmap) {

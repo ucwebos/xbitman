@@ -21,10 +21,10 @@ func NewIndex(store *bolt.DB, name string, iType int) (idx *Index) {
 		Type:  iType,
 		Store: store,
 	}
-	fmt.Println("index xx init", name)
+	fmt.Println("index init", name)
 	idx.Store.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(name), idx.Number())
-		fmt.Println("index xx init store", name)
+		fmt.Println("index init store", name)
 		return err
 	})
 	return idx

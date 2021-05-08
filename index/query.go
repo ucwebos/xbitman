@@ -7,22 +7,24 @@ import (
 )
 
 const (
-	eq  = "="   // =
-	ne  = "!="  // !=
-	gt  = ">"   // >
-	lt  = "<"   // <
-	ge  = ">="  // >=
-	le  = "<="  // <=
-	in  = "in"  // in
-	btw = "btw" // between
+	eq       = "="        // =
+	ne       = "!="       // !=
+	gt       = ">"        // >
+	lt       = "<"        // <
+	ge       = ">="       // >=
+	le       = "<="       // <=
+	in       = "in"       // in
+	btw      = "btw"      // between
+	contains = "contains" // contains 数组包含
 )
 
 type Op struct {
-	Key string      `json:"key,omitempty"`
-	Op  string      `json:"op,omitempty"`
-	Val interface{} `json:"val,omitempty"`
-	Or  []Op        `json:"or,omitempty"`
-	And []Op        `json:"and,omitempty"`
+	Key    string      `json:"key,omitempty"`
+	SubKey string      `json:"subKey,omitempty"`
+	Op     string      `json:"op,omitempty"`
+	Val    interface{} `json:"val,omitempty"`
+	Or     []Op        `json:"or,omitempty"`
+	And    []Op        `json:"and,omitempty"`
 }
 
 type Limit struct {
