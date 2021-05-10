@@ -109,8 +109,16 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 			it.UKey = t.uKeyAdd()
 			newUKeys[it.pk] = it.UKey
 		} else {
-			// item 对比 it.Data ?
-			t.idxBatchWriteData(idxBatchRmData, it.Data, it.UKey)
+			// item 对比 it.Data
+			rData := make(map[string]interface{})
+			for k, v := range item {
+				if ov, ok := it.Data[k]; ok {
+					if ov != v {
+						rData[k] = ov
+					}
+				}
+			}
+			t.idxBatchWriteData(idxBatchRmData, rData, it.UKey)
 		}
 		t.idxBatchWriteData(idxBatchData, item, it.UKey)
 	}
@@ -133,7 +141,16 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	// 写kv todo 如何保证kv数据和index数据事物性
 	wBatch := kvWriter.NewBatch()
 	for i, vData := range items {
-		uKey := ukData[i].UKey
+		it := ukData[i]
+		uKey := it.UKey
+		// 保证put部分字段时不会覆盖其他字段
+		if it.Data != nil && len(it.Data) > 0 {
+			for k, v := range it.Data {
+				if _, ok := vData[k]; !ok {
+					vData[k] = v
+				}
+			}
+		}
 		buf, _ := libs.JSON.Marshal(vData)
 		wBatch.Set(t.kvKey(uKey), buf)
 	}
