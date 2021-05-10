@@ -108,19 +108,25 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 		if it.UKey == 0 {
 			it.UKey = t.uKeyAdd()
 			newUKeys[it.pk] = it.UKey
-		} else {
-			// item 对比 it.Data
-			rData := make(map[string]interface{})
-			for k, v := range item {
-				if ov, ok := it.Data[k]; ok {
-					if ov != v {
-						rData[k] = ov
-					}
+			t.idxBatchWriteData(idxBatchData, item, it.UKey)
+			continue
+		}
+		// item 对比 it.Data
+		var (
+			aData = make(map[string]interface{})
+			rData = make(map[string]interface{})
+		)
+		// todo 注意！更改表结构必须先刷数据
+		for k, v := range item {
+			if ov, ok := it.Data[k]; ok {
+				if ov != v {
+					rData[k] = ov
+					aData[k] = v
 				}
 			}
-			t.idxBatchWriteData(idxBatchRmData, rData, it.UKey)
 		}
-		t.idxBatchWriteData(idxBatchData, item, it.UKey)
+		t.idxBatchWriteData(idxBatchRmData, rData, it.UKey)
+		t.idxBatchWriteData(idxBatchData, aData, it.UKey)
 	}
 	// 写 pk
 	err = t.PkMap.PutBatch(newUKeys)
@@ -158,8 +164,7 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	if err != nil {
 		return err
 	}
-	wBatch.Close()
-	return err
+	return wBatch.Close()
 }
 
 func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (ukData map[int]uItem, err error) {
