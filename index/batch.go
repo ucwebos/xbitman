@@ -131,9 +131,21 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 				if !ok2 {
 					continue
 				}
-				if bytes.Compare(TypeConv(idx.IType(), ov), TypeConv(idx.IType(), v)) != 0 {
-					rData[k] = ov
-					aData[k] = v
+				switch idx.IType() {
+				case conf.TypeSet, conf.TypeMulti:
+					var (
+						b1, _ = libs.JSON.Marshal(ov)
+						b2, _ = libs.JSON.Marshal(v)
+					)
+					if bytes.Compare(b1, b2) != 0 {
+						rData[k] = ov
+						aData[k] = v
+					}
+				default:
+					if bytes.Compare(TypeConv(idx.IType(), ov), TypeConv(idx.IType(), v)) != 0 {
+						rData[k] = ov
+						aData[k] = v
+					}
 				}
 			}
 		}
@@ -164,7 +176,7 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 		// 保证put部分字段时不会覆盖其他字段
 		if it.Data != nil && len(it.Data) > 0 {
 			for k, v := range it.Data {
-				if _, ok := vData[k]; !ok {
+				if x, ok := vData[k]; !ok || x == nil {
 					vData[k] = v
 				}
 			}

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -72,7 +73,7 @@ func (t *Table) Save() (err error) {
 }
 
 func (t *Table) uKeyAdd() uint32 {
-	t.UKey++
+	atomic.AddUint32(&t.UKey, 1)
 	return t.UKey
 }
 
