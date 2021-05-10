@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/cstockton/go-conv"
@@ -29,6 +30,9 @@ func (t *Table) idxBatchWriteData(idxBatch map[string]map[string][]uint32, item 
 		)
 		switch schemeKey.Type {
 		case conf.TypeSet:
+			if iv == nil {
+				continue
+			}
 			if reflect.TypeOf(iv).Kind() != reflect.Slice {
 				iVal = string(TypeConv(schemeKey.Type, iv))
 				t._idxBatchWriteData(idxBatch, iKey, iVal, uKey)
@@ -41,6 +45,9 @@ func (t *Table) idxBatchWriteData(idxBatch map[string]map[string][]uint32, item 
 				t._idxBatchWriteData(idxBatch, iKey, iVal, uKey)
 			}
 		case conf.TypeMulti:
+			if iv == nil {
+				continue
+			}
 			if reflect.TypeOf(iv).Kind() != reflect.Slice {
 				continue
 			}
@@ -106,9 +113,10 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	for i, item := range items {
 		it := ukData[i]
 		if it.UKey == 0 {
-			it.UKey = t.uKeyAdd()
-			newUKeys[it.pk] = it.UKey
-			t.idxBatchWriteData(idxBatchData, item, it.UKey)
+			uKey := t.uKeyAdd()
+			ukData[i].UKey = uKey
+			newUKeys[it.pk] = uKey
+			t.idxBatchWriteData(idxBatchData, item, uKey)
 			continue
 		}
 		// item 对比 it.Data
@@ -119,7 +127,11 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 		// todo 注意！更改表结构必须先刷数据
 		for k, v := range item {
 			if ov, ok := it.Data[k]; ok {
-				if ov != v {
+				idx, ok2 := t.Indexes[k]
+				if !ok2 {
+					continue
+				}
+				if bytes.Compare(TypeConv(idx.IType(), ov), TypeConv(idx.IType(), v)) != 0 {
 					rData[k] = ov
 					aData[k] = v
 				}
@@ -167,8 +179,8 @@ func (t *Table) PutBatch(items []map[string]interface{}) (err error) {
 	return wBatch.Close()
 }
 
-func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (ukData map[int]uItem, err error) {
-	ukData = make(map[int]uItem, 0)
+func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (ukData map[int]*uItem, err error) {
+	ukData = make(map[int]*uItem, 0)
 	pks := make([]string, len(items))
 	for i, item := range items {
 		pkv, ok := item[t.Scheme.PKey.Key]
@@ -187,15 +199,15 @@ func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (u
 			ukData[i] = v
 			continue
 		}
-		ukData[i] = uItem{
+		ukData[i] = &uItem{
 			pk: pk,
 		}
 	}
 	return ukData, nil
 }
 
-func (t *Table) readDataByPKeys(pks []string, kvReader kv.Reader) (dataMap map[string]uItem, err error) {
-	dataMap = make(map[string]uItem)
+func (t *Table) readDataByPKeys(pks []string, kvReader kv.Reader) (dataMap map[string]*uItem, err error) {
+	dataMap = make(map[string]*uItem)
 	var (
 		uKvKeys = make([]string, 0)
 		uKeyMap = t.PkMap.mapGets(pks)
@@ -216,7 +228,7 @@ func (t *Table) readDataByPKeys(pks []string, kvReader kv.Reader) (dataMap map[s
 		if uKvKey, ok := pkKvMap[pk]; ok {
 			if v, ok := uDataMap[uKvKey]; ok {
 				var (
-					item = uItem{
+					item = &uItem{
 						UKey: uKeyMap[pk],
 						pk:   pk,
 					}

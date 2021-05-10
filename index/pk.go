@@ -27,9 +27,7 @@ func NewPkMap(store *bolt.DB, name string, iType int) (pk *PkMap) {
 		Store: store,
 	}
 	fmt.Println("pk init", name)
-	fmt.Println(pk.Store)
 	pk.Store.Update(func(tx *bolt.Tx) error {
-		fmt.Println(tx)
 		_, err := tx.CreateBucketIfNotExists([]byte(name), pk.Number())
 		fmt.Println("pk init store", err)
 		return err

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/cstockton/go-conv"
@@ -25,6 +26,7 @@ const (
 
 type Table struct {
 	Mux     sync.Mutex        `json:"-"`
+	Tick    *time.Ticker      `json:"-"`
 	Name    string            `json:"name"`
 	UKey    uint32            `json:"uKey"`
 	Store   *bolt.DB          `json:"-"`
@@ -36,11 +38,17 @@ type Table struct {
 func NewTable(store *bolt.DB, name string) *Table {
 	t := &Table{
 		Mux:     sync.Mutex{},
+		Tick:    time.NewTicker(1 * time.Second),
 		Name:    name,
 		UKey:    0,
 		Store:   store,
 		Indexes: make(map[string]*Index),
 	}
+	go func() {
+		for range t.Tick.C {
+			t.Save()
+		}
+	}()
 	return t
 }
 
@@ -52,12 +60,7 @@ func (t *Table) Load(buf []byte) (err error) {
 	return libs.JSON.Unmarshal(buf, &t)
 }
 
-func (t *Table) uKeyAdd() uint32 {
-	t.UKey++
-	return t.UKey
-}
-
-func (t *Table) Close() (err error) {
+func (t *Table) Save() (err error) {
 	return t.Store.Update(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(TABLE, false)
 		if bkt == nil {
@@ -66,6 +69,15 @@ func (t *Table) Close() (err error) {
 		buf, _ := libs.JSON.Marshal(t)
 		return bkt.Put([]byte(t.Name), buf)
 	})
+}
+
+func (t *Table) uKeyAdd() uint32 {
+	t.UKey++
+	return t.UKey
+}
+
+func (t *Table) Close() (err error) {
+	return t.Save()
 }
 
 func (t *Table) InitIndexes() {
