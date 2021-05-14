@@ -223,28 +223,28 @@ func (t *Table) Query(where Op, limit *Limit, sort *Sort) (list []json.RawMessag
 		start = limit.Start
 		size = limit.Size
 	}
+	// 分页func
+	offset := 0
+	cb := func(x uint32) bool {
+		if offset >= start {
+			uKeys = append(uKeys, t.kvKey(x))
+			if len(uKeys) == size {
+				return false
+			}
+		}
+		offset++
+		return true
+	}
 	if sort != nil && sort.Key != "" {
 		// 执行排序
-		uKey32s, err := t.sort(bm, sort.Key, sort.Desc, start, size)
+		err := t.sort(bm, sort.Key, sort.Desc, cb)
 		if err != nil {
 			return nil, 0, err
 		}
-		for _, key32 := range uKey32s {
-			uKeys = append(uKeys, t.kvKey(key32))
-		}
 	} else {
-		offset := 0
-		bm.Iterate(func(x uint32) bool {
-			if offset >= start {
-				uKeys = append(uKeys, t.kvKey(x))
-				if len(uKeys) == size {
-					return false
-				}
-			}
-			offset++
-			return true
-		})
+		bm.Iterate(cb)
 	}
+
 	reader, err := kvstore.KVReader()
 	if err != nil {
 		return nil, 0, err
@@ -378,15 +378,15 @@ func (t *Table) or(where []Op) (bm *roaring.Bitmap, err error) {
 	return bm, err
 }
 
-func (t *Table) sort(bm *roaring.Bitmap, key string, desc bool, start, size int) (uKeys []uint32, err error) {
+func (t *Table) sort(bm *roaring.Bitmap, key string, desc bool, cb func(x uint32) bool) (err error) {
 	if key == t.Scheme.PKey.Key {
-		return t.PkMap.sort(bm, desc, start, size), nil
+		return t.PkMap.sort(bm, desc, cb)
 	}
 	idx, ok := t.Indexes[key]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("not found sort index[%s]", key))
+		return errors.New(fmt.Sprintf("not found sort index[%s]", key))
 	}
-	return idx.sort(bm, desc, start, size), nil
+	return idx.sort(bm, desc, cb)
 }
 
 func TypeConv(iType int, v interface{}) (buf []byte) {

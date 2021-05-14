@@ -220,9 +220,12 @@ func (t *Table) oUKeyData(items []map[string]interface{}, kvReader kv.Reader) (u
 
 func (t *Table) readDataByPKeys(pks []string, kvReader kv.Reader) (dataMap map[string]*uItem, err error) {
 	dataMap = make(map[string]*uItem)
+	uKeyMap := t.PkMap.mapGets(pks)
+	if len(uKeyMap) == 0 {
+		return dataMap, nil
+	}
 	var (
 		uKvKeys = make([]string, 0)
-		uKeyMap = t.PkMap.mapGets(pks)
 		pkKvMap = make(map[string]string)
 	)
 	// to kv key

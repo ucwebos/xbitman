@@ -251,10 +251,8 @@ func (p *PkMap) findBetween(key []byte, key2 []byte) (bm *roaring.Bitmap) {
 }
 
 // todo 可以增加 key值判断
-func (p *PkMap) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []uint32) {
-	uKeys = make([]uint32, 0)
-	offset := 0
-	p.Store.View(func(tx *bolt.Tx) error {
+func (p *PkMap) sort(bm *roaring.Bitmap, desc bool, cb func(x uint32) bool) (err error) {
+	err = p.Store.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket([]byte(p.Name), p.Number()).Cursor()
 		if desc {
 			for k, v := c.Last(); k != nil; k, v = c.Prev() {
@@ -262,13 +260,9 @@ func (p *PkMap) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []ui
 					uKeyI, _ := strconv.Atoi(string(v))
 					uKey := uint32(uKeyI)
 					if !bm.CheckedAdd(uKey) {
-						if offset >= start {
-							uKeys = append(uKeys, uKey)
-							if len(uKeys) == size {
-								break
-							}
+						if !cb(uKey) {
+							break
 						}
-						offset++
 					}
 				}
 			}
@@ -279,17 +273,13 @@ func (p *PkMap) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []ui
 				uKeyI, _ := strconv.Atoi(string(v))
 				uKey := uint32(uKeyI)
 				if !bm.CheckedAdd(uKey) {
-					if offset >= start {
-						uKeys = append(uKeys, uKey)
-						if len(uKeys) == size {
-							break
-						}
+					if !cb(uKey) {
+						break
 					}
-					offset++
 				}
 			}
 		}
 		return nil
 	})
-	return uKeys
+	return err
 }

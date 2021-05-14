@@ -3,6 +3,7 @@ package index
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"xbitman/conf"
 	"xbitman/libs"
 	bolt "xbitman/libs/bbolt"
@@ -14,6 +15,7 @@ var (
 )
 
 type Database struct {
+	mux    sync.Mutex
 	Store  *bolt.DB `json:"-"`
 	Name   string
 	tables map[string]*Table
@@ -51,6 +53,7 @@ func NewDatabase(name string) (db *Database, err error) {
 		return nil, err
 	}
 	return &Database{
+		mux:    sync.Mutex{},
 		Store:  store,
 		Name:   name,
 		tables: tables,
@@ -70,7 +73,8 @@ func Close() error {
 }
 
 func (db *Database) DeleteTable(name string) (err error) {
-	// todo 加锁？
+	db.mux.Lock()
+	defer db.mux.Unlock()
 	tab, ok := db.tables[name]
 	if ok {
 		return nil
@@ -90,7 +94,8 @@ func (db *Database) DeleteTable(name string) (err error) {
 }
 
 func (db *Database) CreateTable(name string, table *conf.Table) (err error) {
-	// todo 加锁？
+	db.mux.Lock()
+	defer db.mux.Unlock()
 	if _, ok := db.tables[name]; ok {
 		return errors.New(fmt.Sprintf("table [%s] Exists", name))
 	}

@@ -48,7 +48,7 @@ type qs interface {
 	findMoreThan(key []byte) (bm *roaring.Bitmap)
 	findMoreOrEq(key []byte) (bm *roaring.Bitmap)
 	findBetween(key []byte, key2 []byte) (bm *roaring.Bitmap)
-	sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []uint32)
+	sort(bm *roaring.Bitmap, desc bool, cb func(x uint32) bool) (err error)
 }
 
 func (idx *Index) find(key []byte) (bm *roaring.Bitmap) {
@@ -205,14 +205,9 @@ func (idx *Index) findBetween(key []byte, key2 []byte) (bm *roaring.Bitmap) {
 	return bm
 }
 
-func (idx *Index) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []uint32) {
-	uKeys = make([]uint32, 0)
-	var (
-		offset = 0
-		end    = false
-	)
-
-	idx.Store.View(func(tx *bolt.Tx) error {
+func (idx *Index) sort(bm *roaring.Bitmap, desc bool, cb func(x uint32) bool) (err error) {
+	var end = false
+	err = idx.Store.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket([]byte(idx.Name), idx.Number()).Cursor()
 		if desc {
 			for k, v := c.Last(); k != nil; k, v = c.Prev() {
@@ -224,14 +219,9 @@ func (idx *Index) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []
 					}
 					bmt.And(bm)
 					bmt.Iterate(func(x uint32) bool {
-						if offset >= start {
-							uKeys = append(uKeys, x)
-							if len(uKeys) == size {
-								end = true
-								return false
-							}
+						if !cb(x) {
+							end = true
 						}
-						offset++
 						return true
 					})
 					if end {
@@ -250,14 +240,9 @@ func (idx *Index) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []
 				}
 				bmt.And(bm)
 				bmt.Iterate(func(x uint32) bool {
-					if offset >= start {
-						uKeys = append(uKeys, x)
-						if len(uKeys) == size {
-							end = true
-							return false
-						}
+					if !cb(x) {
+						end = true
 					}
-					offset++
 					return true
 				})
 				if end {
@@ -267,5 +252,5 @@ func (idx *Index) sort(bm *roaring.Bitmap, desc bool, start, size int) (uKeys []
 		}
 		return nil
 	})
-	return uKeys
+	return err
 }

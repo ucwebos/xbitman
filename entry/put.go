@@ -33,7 +33,10 @@ func put(ctx *gin.Context) {
 		JSONError(ctx, ecode.ErrUser, fmt.Sprintf("not found table[%s]", table))
 		return
 	}
-
+	if len(req.Data) > 1000 {
+		JSONError(ctx, ecode.ErrUser, fmt.Sprintf("A maximum of 1000 items are allowed [%s]", table))
+		return
+	}
 	err = tb.PutBatch(req.Data)
 	if err != nil {
 		JSONError(ctx, ecode.ErrUser, fmt.Sprintf("PutBatch err [%v]", err))
