@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -222,6 +223,9 @@ func (t *Table) Query(where Op, limit *Limit, sort *Sort) (list []json.RawMessag
 	if limit != nil {
 		start = limit.Start
 		size = limit.Size
+		if size > 1000 {
+			size = 1000
+		}
 	}
 	// 分页func
 	offset := 0
@@ -287,8 +291,8 @@ func (t *Table) query(whr Op) (bm *roaring.Bitmap, err error) {
 	}
 	switch idx.Type {
 	case conf.TypeSet:
-		if whr.Op != contains {
-			return nil, errors.New(fmt.Sprintf("index[%s] is Set can only have to operator[contains] ", whr.Key))
+		if whr.Op != contains && whr.Op != nContains {
+			return nil, errors.New(fmt.Sprintf("index[%s] is Set can only have to operator[contains,nContains] ", whr.Key))
 		}
 	case conf.TypeMulti:
 		if whr.SubKey == "" {
@@ -320,6 +324,17 @@ func (t *Table) exec(q qs, whr Op) (bm *roaring.Bitmap, err error) {
 			list = append(list, TypeConv(q.IType(), ele.Interface()))
 		}
 		return q.findIn(list), nil
+	case nin:
+		if reflect.TypeOf(whr.Val).Kind() != reflect.Slice {
+			return nil, errors.New("operator [nin] must be use slice")
+		}
+		var list = make([][]byte, 0)
+		s := reflect.ValueOf(whr.Val)
+		for i := 0; i < s.Len(); i++ {
+			ele := s.Index(i)
+			list = append(list, TypeConv(q.IType(), ele.Interface()))
+		}
+		return q.findNotIn(list), nil
 	case lt:
 		return q.findLessThan(TypeConv(q.IType(), whr.Val)), nil
 	case le:
@@ -349,6 +364,20 @@ func (t *Table) exec(q qs, whr Op) (bm *roaring.Bitmap, err error) {
 			return nil, errors.New(fmt.Sprintf("the index can't be operator[%s]", whr.Op))
 		}
 		return q.find(TypeConv(conf.TypeString, whr.Val)), nil
+	case nContains:
+		if q.IType() != conf.TypeSet {
+			return nil, errors.New(fmt.Sprintf("the index can't be operator[%s]", whr.Op))
+		}
+		if reflect.TypeOf(whr.Val).Kind() != reflect.Slice {
+			return nil, errors.New("operator [nin] must be use slice")
+		}
+		var list = make([][]byte, 0)
+		s := reflect.ValueOf(whr.Val)
+		for i := 0; i < s.Len(); i++ {
+			ele := s.Index(i)
+			list = append(list, TypeConv(conf.TypeString, ele.Interface()))
+		}
+		return q.findNotIn(list), nil
 	default:
 		return nil, errors.New(fmt.Sprintf("not found operator[%s]", whr.Op))
 	}
@@ -410,6 +439,16 @@ func TypeConv(iType int, v interface{}) (buf []byte) {
 	default:
 		return nil
 	}
+}
+
+func notIn(k []byte, keys [][]byte) (ok bool) {
+	for _, key := range keys {
+		if bytes.Compare(k, key) != 0 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (t *Table) kvKey(uKey uint32) (key []byte) {

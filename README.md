@@ -29,8 +29,10 @@
 |`<`|小于|
 |`<=`|小于等于|
 |`in`|类似sql in ; val值为数组|
+|`nin`|类似sql not in ; val值为数组|
 |`btw`|在[min,max]之间 ; val值为数组|
 |`contains`|集合包含 仅用于索引是集合的情况|
+|`ncontains`|集合不包含 仅用于索引是集合的情况|
 
 ## QUERY [:table/query] 语法:
 

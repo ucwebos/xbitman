@@ -167,6 +167,23 @@ func (p *PkMap) findIn(keys [][]byte) (bm *roaring.Bitmap) {
 	return bm
 }
 
+func (p *PkMap) findNotIn(keys [][]byte) (bm *roaring.Bitmap) {
+	bm = roaring.NewBitmap()
+	p.Store.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket([]byte(p.Name), p.Number())
+		bkt.ForEach(func(k, v []byte) error {
+			if notIn(k, keys) {
+				uKeyI, _ := strconv.Atoi(string(v))
+				uKey := uint32(uKeyI)
+				bm.Add(uKey)
+			}
+			return nil
+		})
+		return nil
+	})
+	return bm
+}
+
 func (p *PkMap) findLessThan(key []byte) (bm *roaring.Bitmap) {
 	bm = roaring.NewBitmap()
 	p.Store.View(func(tx *bolt.Tx) error {

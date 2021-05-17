@@ -7,15 +7,17 @@ import (
 )
 
 const (
-	eq       = "="        // =
-	ne       = "!="       // !=
-	gt       = ">"        // >
-	lt       = "<"        // <
-	ge       = ">="       // >=
-	le       = "<="       // <=
-	in       = "in"       // in
-	btw      = "btw"      // between
-	contains = "contains" // contains 数组包含
+	eq        = "="         // =
+	ne        = "!="        // !=
+	gt        = ">"         // >
+	lt        = "<"         // <
+	ge        = ">="        // >=
+	le        = "<="        // <=
+	in        = "in"        // in
+	nin       = "nin"       // in
+	btw       = "btw"       // between
+	contains  = "contains"  // contains 数组包含
+	nContains = "ncontains" // ncontains 数组不包含
 )
 
 type Op struct {
@@ -43,6 +45,7 @@ type qs interface {
 	find(key []byte) (bm *roaring.Bitmap)
 	findNot(key []byte) (bm *roaring.Bitmap)
 	findIn(keys [][]byte) (bm *roaring.Bitmap)
+	findNotIn(keys [][]byte) (bm *roaring.Bitmap)
 	findLessThan(key []byte) (bm *roaring.Bitmap)
 	findLessOrEq(key []byte) (bm *roaring.Bitmap)
 	findMoreThan(key []byte) (bm *roaring.Bitmap)
@@ -102,6 +105,26 @@ func (idx *Index) findIn(keys [][]byte) (bm *roaring.Bitmap) {
 		return nil
 	})
 	return bm
+}
+
+func (idx *Index) findNotIn(keys [][]byte) (bm *roaring.Bitmap) {
+	bm = roaring.NewBitmap()
+	idx.Store.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket([]byte(idx.Name), idx.Number())
+		return bkt.ForEach(func(k, v []byte) error {
+			if notIn(k, keys) {
+				bmt := roaring.NewBitmap()
+				_, err := bmt.FromBuffer(v)
+				if err != nil {
+					// ?? nil
+					return err
+				}
+				bm.Or(bmt)
+			}
+			return nil
+		})
+	})
+	return
 }
 
 func (idx *Index) findLessThan(key []byte) (bm *roaring.Bitmap) {
